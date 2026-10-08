@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identificador automático de materiales</title>
+<style>
+  :root {
+    --bg: #10141b; --panel: #171d27; --panel-2: #1d2431; --border: #2b3444;
+    --text: #e7ecf3; --text-dim: #8996a8; --accent: #4fc3f7;
+    --danger: #ef6a5f; --success: #5fbf77;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+    display:flex; justify-content:center; padding:28px 16px 60px; }
+  .wrap { width:100%; max-width:900px; }
+  h1 { font-size:1.35rem; font-weight:700; margin:0 0 4px; }
+  .subtitle { color:var(--text-dim); font-size:0.92rem; margin:0 0 22px; line-height:1.5; max-width:66ch; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px; margin-bottom:16px; }
+  .dropzone { border:1.5px dashed var(--border); border-radius:10px; padding:48px 20px; text-align:center;
+    color:var(--text-dim); cursor:pointer; }
+  .dropzone:hover, .dropzone.drag { border-color:var(--accent); background:var(--panel-2); }
+  .dropzone input { display:none; }
+  .canvas-holder { display:flex; justify-content:center; border-radius:8px; border:1px solid var(--border);
+    overflow:auto; background:var(--panel-2); }
+  canvas { display:block; max-width:100%; }
+  .btn-row { display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; }
+  button { font-family:var(--sans); font-size:0.92rem; font-weight:600; border-radius:8px;
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text); padding:11px 18px; cursor:pointer; }
+  button:hover:not(:disabled) { filter:brightness(1.12); } button:active { transform:translateY(1px); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#071019; }
+  button.secondary { background:transparent; }
+  .estado { margin-top:14px; font-size:0.88rem; color:var(--text-dim); display:flex; align-items:center; gap:10px; }
+  .spinner { width:16px; height:16px; border-radius:50%; border:2px solid var(--border);
+    border-top-color:var(--accent); animation:spin 0.8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .msg { margin-top:10px; font-size:0.85rem; min-height:1.2em; font-family:var(--mono); line-height:1.5; }
+  .msg.ok { color:var(--success); } .msg.err { color:var(--danger); }
+  .aviso { background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    padding:12px 14px; font-size:0.82rem; color:var(--text-dim); line-height:1.5; margin-top:14px; }
+  .aviso strong { color:var(--text); }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛰️ Identificador automático de materiales</h1>
+  <p class="subtitle">
+    Sube una captura de pantalla de Google Earth y Claude identifica visualmente los techos
+    y superficies, marcándolos con polígonos de colores.
+  </p>
+
+  <div class="panel" id="dropPanel">
+    <div class="dropzone" id="dropzone">
+      <div><strong>Haz clic aquí</strong> o arrastra una imagen</div>
+      <div style="margin-top:6px; font-size:0.82rem;">Una imagen a la vez</div>
+      <input type="file" id="fileInput" accept="image/*">
+    </div>
+  </div>
+
+  <div id="resultPanel" class="hidden">
+    <div class="panel">
+      <div class="canvas-holder"><canvas id="canvas"></canvas></div>
+      <div class="estado hidden" id="estado"><div class="spinner"></div><span id="estadoTexto">Pensando…</span></div>
+      <div class="btn-row">
+        <button class="secondary" id="btnOtra">Subir otra imagen</button>
+        <button class="primary" id="btnAnalizar">🔍 Analizar con Claude</button>
+        <button class="secondary hidden" id="btnDescargar">⬇ Descargar resultado</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div class="aviso">
+      <strong>Importante:</strong> esto usa el criterio visual de Claude, no un algoritmo entrenado
+      específicamente con asbesto confirmado. Trátalo como una primera lectura orientativa —
+      las zonas marcadas "Asbesto (sospecha)" pueden confundirse con lámina/metal corrugado o
+      escaleras vistas desde arriba. No reemplaza una verificación en campo.
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const COLORES = {
+    "Asbesto (sospecha)":  [230, 30, 30],
+    "Lamina/metal":        [255, 150, 0],
+    "Concreto":            [70, 130, 220],
+    "Teja/ceramica":       [200, 160, 30],
+    "Vegetacion":          [40, 160, 60],
+    "Autos":               [150, 60, 200],
+    "Lona/otras cosas":    [0, 190, 190],
+    "Escalera (NO techo)": [255, 255, 255],
+  };
+
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const dropPanel = document.getElementById('dropPanel');
+  const resultPanel = document.getElementById('resultPanel');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const estado = document.getElementById('estado');
+  const estadoTexto = document.getElementById('estadoTexto');
+  const msgEl = document.getElementById('msg');
+  const btnAnalizar = document.getElementById('btnAnalizar');
+  const btnOtra = document.getElementById('btnOtra');
+  const btnDescargar = document.getElementById('btnDescargar');
+
+  let img = null;
+  let currentFile = null;
+
+  function showMsg(text, kind) {
+    msgEl.textContent = text;
+    msgEl.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+  ['dragenter', 'dragover'].forEach(ev => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+  dropzone.addEventListener('drop', (e) => { if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+
+  function handleFile(file) {
+    currentFile = file;
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      img = image;
+      const maxW = 860;
+      const scale = Math.min(1, maxW / img.naturalWidth);
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      dropPanel.classList.add('hidden');
+      resultPanel.classList.remove('hidden');
+      btnDescargar.classList.add('hidden');
+      showMsg('');
+      URL.revokeObjectURL(url);
+    };
+    image.src = url;
+  }
+
+  btnOtra.addEventListener('click', () => {
+    dropPanel.classList.remove('hidden');
+    resultPanel.classList.add('hidden');
+    fileInput.value = '';
+  });
+
+  function dibujarPoligonos(regiones) {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    for (const r of regiones) {
+      const color = COLORES[r.categoria];
+      if (!color || !Array.isArray(r.puntos) || r.puntos.length < 3) continue;
+      const pts = r.puntos.map(([x, y]) => [x * canvas.width, y * canvas.height]);
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},0.12)`;
+      ctx.fill();
+      ctx.strokeStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+    const usadas = [...new Set(regiones.map(r => r.categoria).filter(c => COLORES[c]))];
+    if (!usadas.length) return;
+    const boxH = 18, pad = 6, lx = 12, ly = 12;
+    const altoLeyenda = usadas.length * (boxH + pad) + pad;
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillRect(lx - 6, ly - 6, 230, altoLeyenda);
+    ctx.font = '12px sans-serif';
+    usadas.forEach((cat, i) => {
+      const c = COLORES[cat];
+      const yy = ly + i * (boxH + pad);
+      ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+      ctx.fillRect(lx, yy, boxH, boxH);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(lx, yy, boxH, boxH);
+      ctx.fillStyle = '#000';
+      ctx.fillText(cat, lx + boxH + 8, yy + boxH - 5);
+    });
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  btnAnalizar.addEventListener('click', async () => {
+    btnAnalizar.disabled = true;
+    estado.classList.remove('hidden');
+    estadoTexto.textContent = 'Pensando… (puede tardar entre 10 y 60 segundos)';
+    showMsg('');
+    try {
+      const imagenBase64 = await fileToBase64(currentFile);
+      const tipoMime = currentFile.type || 'image/png';
+
+      const resp = await fetch('/api/analizar', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ imagenBase64, tipoMime }),
+      });
+      const datos = await resp.json();
+      if (!resp.ok) throw new Error(datos.error || 'Error del servidor');
+
+      dibujarPoligonos(datos.regiones);
+      btnDescargar.classList.remove('hidden');
+      showMsg(`${datos.regiones.length} regiones identificadas.`, 'ok');
+    } catch (e) {
+      showMsg('Error: ' + e.message, 'err');
+    } finally {
+      btnAnalizar.disabled = false;
+      estado.classList.add('hidden');
+    }
+  });
+
+  btnDescargar.addEventListener('click', () => {
+    canvas.toBlob((blob) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'imagen_anotada.png';
+      a.click();
+    }, 'image/png');
+  });
+})();
+</script>
+</body>
+</html>
