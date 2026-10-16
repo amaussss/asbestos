@@ -30,6 +30,31 @@ Responde UNICAMENTE con un arreglo JSON (nada de texto antes o despues), cada el
 
 const MODELO_POR_DEFECTO = "gemini-2.5-flash"; // revisa en AI Studio que siga en la capa gratuita
 
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Llama a Gemini con un modelo. Si responde 503 (saturado), reintenta un par de veces.
+async function llamarGemini(modelo, apiKey, imagenBase64, tipoMime) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelo)}:generateContent`;
+  const cuerpo = JSON.stringify({
+    contents: [{ parts: [{ inline_data: { mime_type: tipoMime, data: imagenBase64 } }, { text: PROMPT }] }],
+    generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
+  });
+
+  let ultima;
+  for (let intento = 0; intento < 3; intento++) {
+    const respuesta = await fetch(url, {
+      method: "POST",
+      headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+      body: cuerpo,
+    });
+    const datos = await respuesta.json();
+    ultima = { ok: respuesta.ok, status: respuesta.status, datos };
+    if (respuesta.status !== 503) return ultima; // solo reintentamos "alta demanda"
+    if (intento < 2) await esperar(1500 * (intento + 1));
+  }
+  return ultima;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Metodo no permitido" });
@@ -42,6 +67,7 @@ export default async function handler(req, res) {
     });
   }
   const modelo = process.env.GEMINI_MODEL || MODELO_POR_DEFECTO;
+  const respaldo = process.env.GEMINI_FALLBACK_MODEL; // opcional
 
   try {
     const { imagenBase64, tipoMime } = req.body || {};
@@ -49,35 +75,20 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Falta la imagen en la solicitud." });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelo)}:generateContent`;
-    const respuesta = await fetch(url, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": apiKey,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { inline_data: { mime_type: tipoMime, data: imagenBase64 } },
-              { text: PROMPT },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: "application/json",
-        },
-      }),
-    });
-
-    const datos = await respuesta.json();
-
-    if (!respuesta.ok) {
-      const mensaje = (datos && datos.error && datos.error.message) || "Error desconocido de la API";
-      return res.status(respuesta.status).json({ error: mensaje });
+    let r = await llamarGemini(modelo, apiKey, imagenBase64, tipoMime);
+    let probados = modelo;
+    if (r.status === 503 && respaldo && respaldo !== modelo) {
+      r = await llamarGemini(respaldo, apiKey, imagenBase64, tipoMime);
+      probados = modelo + " y luego " + respaldo;
+    } else if (r.status === 503 && !respaldo) {
+      probados = modelo + " (sin modelo de respaldo configurado)";
     }
+
+    if (!r.ok) {
+      const mensaje = (r.datos && r.datos.error && r.datos.error.message) || "Error desconocido de la API";
+      return res.status(r.status).json({ error: mensaje + " [modelo(s) probado(s): " + probados + "]" });
+    }
+    const datos = r.datos;
 
     const partes = datos?.candidates?.[0]?.content?.parts || [];
     const texto = partes.map((p) => p.text || "").join("").trim();
@@ -87,14 +98,12 @@ export default async function handler(req, res) {
     }
 
     const limpio = texto.replace(/```json|```/g, "").trim();
-
     let regiones;
     try {
       regiones = JSON.parse(limpio);
     } catch (e) {
       return res.status(502).json({ error: "No se pudo interpretar la respuesta como JSON.", crudo: limpio });
     }
-
     if (!Array.isArray(regiones)) {
       return res.status(502).json({ error: "La respuesta no fue un arreglo.", crudo: limpio });
     }
