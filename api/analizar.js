@@ -3,9 +3,11 @@
 // la manda a la API de Anthropic con las instrucciones de clasificacion, y
 // devuelve el arreglo de regiones/poligonos ya parseado.
 //
-// Requiere una variable de entorno ANTHROPIC_API_KEY configurada en el
-// proyecto de Vercel (Settings -> Environment Variables). Esa clave NUNCA
-// se expone al navegador -- solo vive en el servidor.
+// Version GRATUITA: usa la API de Gemini (Google AI Studio, capa gratuita,
+// sin tarjeta). Requiere la variable de entorno GEMINI_API_KEY configurada en
+// Vercel (Settings -> Environment Variables). La clave NUNCA se expone al
+// navegador -- solo vive en el servidor.
+// Opcional: GEMINI_MODEL para cambiar de modelo sin tocar el codigo.
 
 const PROMPT = `Eres un asistente que analiza una captura de pantalla aerea de Google Earth (vista satelital de una zona urbana en Mexico) para identificar visualmente los materiales de techos y otras superficies visibles.
 
@@ -26,19 +28,20 @@ No cubras toda la imagen -- ignora zonas ambiguas, calles vacias, banquetas sin 
 Responde UNICAMENTE con un arreglo JSON (nada de texto antes o despues), cada elemento con esta forma exacta:
 {"categoria": "Concreto", "puntos": [[0.1,0.05],[0.4,0.03],[0.38,0.3],[0.12,0.28]]}`;
 
-const MODELO = "claude-sonnet-5-5"; // modelo actual con buena capacidad de vision
+const MODELO_POR_DEFECTO = "gemini-2.5-flash"; // revisa en AI Studio que siga en la capa gratuita
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Metodo no permitido" });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: "Falta configurar ANTHROPIC_API_KEY en las variables de entorno de Vercel.",
+      error: "Falta configurar GEMINI_API_KEY en las variables de entorno de Vercel.",
     });
   }
+  const modelo = process.env.GEMINI_MODEL || MODELO_POR_DEFECTO;
 
   try {
     const { imagenBase64, tipoMime } = req.body || {};
@@ -46,28 +49,26 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Falta la imagen en la solicitud." });
     }
 
-    const respuesta = await fetch("https://api.anthropic.com/v1/messages", {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelo)}:generateContent`;
+    const respuesta = await fetch(url, {
       method: "POST",
       headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+        "x-goog-api-key": apiKey,
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: MODELO,
-        max_tokens: 2000,
-        messages: [
+        contents: [
           {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: { type: "base64", media_type: tipoMime, data: imagenBase64 },
-              },
-              { type: "text", text: PROMPT },
+            parts: [
+              { inline_data: { mime_type: tipoMime, data: imagenBase64 } },
+              { text: PROMPT },
             ],
           },
         ],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: "application/json",
+        },
       }),
     });
 
@@ -78,12 +79,14 @@ export default async function handler(req, res) {
       return res.status(respuesta.status).json({ error: mensaje });
     }
 
-    const bloqueTexto = (datos.content || []).find((b) => b.type === "text");
-    if (!bloqueTexto) {
-      return res.status(502).json({ error: "La respuesta no contenia texto." });
+    const partes = datos?.candidates?.[0]?.content?.parts || [];
+    const texto = partes.map((p) => p.text || "").join("").trim();
+    if (!texto) {
+      const motivo = datos?.promptFeedback?.blockReason || datos?.candidates?.[0]?.finishReason || "sin texto";
+      return res.status(502).json({ error: "La respuesta no contenia texto (" + motivo + ")." });
     }
 
-    const limpio = bloqueTexto.text.replace(/```json|```/g, "").trim();
+    const limpio = texto.replace(/```json|```/g, "").trim();
 
     let regiones;
     try {

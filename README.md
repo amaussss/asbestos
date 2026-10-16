@@ -1,72 +1,66 @@
-# Identificador automático de materiales — versión Vercel
+# Identificador automático de materiales — versión 100% gratuita
 
-Misma herramienta que la versión dentro de Claude, pero como una página web
-independiente que tú controlas por completo. No depende de ninguna
-capacidad especial de Claude.ai — llama directamente a la API de Anthropic
-con tu propia clave.
+Página web independiente: subes una captura de Google Earth y un modelo de
+visión (Gemini, capa gratuita de Google AI Studio) marca los materiales con
+polígonos de colores.
+
+Costo total: **$0** — GitHub (gratis) + Vercel plan Hobby (gratis, uso
+personal/no comercial) + Gemini API capa gratuita (sin tarjeta de crédito).
 
 ## Qué incluye
 
 ```
 asbesto-vercel/
-├── api/
-│   └── analizar.js     ← funcion serverless: recibe la imagen, llama a la API de Anthropic
-├── index.html           ← la pagina (frontend)
+├── api/analizar.js   ← funcion serverless: recibe la imagen y llama a Gemini
+├── index.html         ← la pagina (frontend)
 ├── package.json
 └── README.md
 ```
 
-Ya probado localmente (sintaxis, parseo de respuestas, manejo de errores,
-y el flujo completo del frontend) — ver la conversación para el detalle de
-las pruebas. Lo único que no se pudo probar es la llamada real a la API,
-porque requiere tu clave.
+## Paso 1 — Clave gratuita de Gemini
 
-## Paso 1 — Consigue una clave de API de Anthropic
-
-Esto es **distinto** a tu cuenta normal de claude.ai. Ve a:
-
-**https://console.anthropic.com/** → crea una cuenta/inicia sesión → sección
-"API Keys" → crea una clave nueva (empieza con `sk-ant-...`).
-
-**Importante:** esto tiene costo por uso (no es parte de una suscripción de
-Claude.ai) — se cobra por imagen analizada, centavos de dólar por análisis
-aproximadamente. Vas a necesitar agregar un método de pago en la consola.
+1. Entra a https://aistudio.google.com/ con una cuenta de Google.
+2. "Get API key" → "Create API key".
+3. Copia la clave. **No agregues método de pago** — la capa gratuita no lo pide.
 
 ## Paso 2 — Sube el código a GitHub
 
-1. Crea un repositorio nuevo en GitHub (puede ser privado).
-2. Sube estos 4 archivos (`api/analizar.js`, `index.html`, `package.json`,
-   `README.md`) manteniendo la misma estructura de carpetas.
+Crea un repositorio y sube los archivos manteniendo la estructura
+(`api/analizar.js`, `index.html`, `package.json`).
 
 ## Paso 3 — Despliega en Vercel
 
-1. En vercel.com, "Add New Project" → importa el repositorio de GitHub.
-2. Antes de darle "Deploy", ve a **Environment Variables** y agrega:
-   - Nombre: `ANTHROPIC_API_KEY`
-   - Valor: tu clave `sk-ant-...` del Paso 1
-3. Dale "Deploy". Vercel detecta automáticamente `index.html` como sitio
-   estático y `api/analizar.js` como función serverless — no necesitas
-   configurar nada más (no hay build step).
+1. Vercel → "Add New Project" → importa el repositorio.
+2. En **Environment Variables** agrega:
+   - `GEMINI_API_KEY` = tu clave del Paso 1
+   - (opcional) `GEMINI_MODEL` = nombre de otro modelo, si el de por defecto
+     (`gemini-2.5-flash`) deja de estar en la capa gratuita
+3. Deploy. No hay build step.
 
-## Paso 4 — Pruébalo
+## Limitaciones de lo gratis (importante saberlas)
 
-Abre la URL que te da Vercel (algo como `tu-proyecto.vercel.app`), sube una
-captura de Google Earth, y dale "Analizar con Claude".
+- **Límite de uso:** la capa gratuita tiene un tope de solicitudes por minuto
+  y por día (cambia con el tiempo; tus límites reales se ven en AI Studio).
+  Para uso personal o de pocas personas alcanza; para mucha gente a la vez, no.
+- **Privacidad:** en la capa gratuita, Google puede usar lo que envías para
+  mejorar sus productos (revisa sus términos actuales). Son capturas de
+  satélite públicas, pero no subas nada sensible.
+- **Disponibilidad:** Google cambia qué modelos son gratuitos. Si da error de
+  cuota o "modelo no encontrado", cambia `GEMINI_MODEL` por otro que AI Studio
+  marque como gratuito.
+- **Calidad sin probar:** el código está probado con respuestas simuladas
+  (parseo, errores, flujo completo del frontend), pero NO con Gemini real.
+  Qué tan bien identifica techos en estas imágenes borrosas es una pregunta
+  abierta — la confusión lámina/metal vs. fibrocemento vs. escaleras sigue
+  siendo difícil para cualquier modelo. Pruébalo con las 6 imágenes de
+  validación (terreno confirmado) antes de confiar en él.
 
 ## Si algo falla
 
-- **Error 500 "Falta configurar ANTHROPIC_API_KEY"** → revisa que la variable
-  de entorno esté bien escrita en Vercel (exactamente `ANTHROPIC_API_KEY`,
-  sin espacios) y vuelve a desplegar (Vercel a veces necesita un redeploy
-  después de agregar variables nuevas).
-- **Error 401 "invalid x-api-key"** → la clave está mal copiada o fue
-  revocada en la consola de Anthropic.
-- **Error 429 / "rate limit"** → espera un momento y reintenta; o revisa tus
-  límites de uso en console.anthropic.com.
-
-## Nota sobre el modelo usado
-
-El código usa `claude-sonnet-5-5` (línea `MODELO` en `api/analizar.js`).
-Si en el futuro quieres usar otro modelo (más barato/rápido o más
-capaz), solo cambia ese valor — revisa los modelos disponibles en
-la documentación de Anthropic antes de cambiarlo.
+- **500 "Falta configurar GEMINI_API_KEY"** → revisa el nombre exacto de la
+  variable en Vercel y haz un redeploy.
+- **429 / "quota"** → llegaste al límite gratuito; espera un minuto o al día
+  siguiente.
+- **400 / 403 "API key not valid"** → clave mal copiada; genera otra.
+- **404 "model not found"** → cambia `GEMINI_MODEL`.
+- **502 "sin texto (SAFETY)"** → el modelo bloqueó la respuesta; reintenta.
